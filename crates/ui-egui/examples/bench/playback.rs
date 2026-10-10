@@ -691,9 +691,12 @@ pub fn scenario_session(name: &str, file: Option<&str>) -> Option<(Session, Item
         "file" => {
             let path = file?;
             let a = import(&mut s, Path::new(path));
-            let (w, h) = match s.project.item(a).map(|i| &i.kind) {
+            let (w, h, secs) = match s.project.item(a).map(|i| &i.kind) {
                 Some(filmcraft_project::ItemKind::Media(m)) => match m.info.video.as_ref() {
-                    Some(v) => (v.width, v.height),
+                    // The sequence must be the clip's own length: shorter truncates playback, and
+                    // longer asks the source for frames past its end (which costs a failed fetch
+                    // per frame for the rest of the run).
+                    Some(v) => (v.width, v.height, m.info.duration.seconds().max(1.0)),
                     None => {
                         eprintln!("{path}: no video stream");
                         return None;
@@ -704,13 +707,14 @@ pub fn scenario_session(name: &str, file: Option<&str>) -> Option<(Session, Item
                     return None;
                 }
             };
+            eprintln!("  source {w}x{h}, {secs:.2}s");
             // Native resolution, capped at 4K so an 8K file cannot ask for an absurd sequence.
             let scale = (3840.0 / f64::from(w.max(1))).min(2160.0 / f64::from(h.max(1))).min(1.0);
             let (sw, sh) = (((f64::from(w) * scale) as u32).max(2) & !1, ((f64::from(h) * scale) as u32).max(2) & !1);
             if (sw, sh) != (w, h) {
                 eprintln!("  sequence capped to {sw}x{sh} (source {w}x{h})");
             }
-            build_sequence(&mut s, sw, sh, &[(a, 100.0, None, 0.0, 100.0)], &[], 30.0)
+            build_sequence(&mut s, sw, sh, &[(a, 100.0, None, 0.0, 100.0)], &[], secs)
         }
         "h264-1080" | "seek-storm" => {
             let a = import(&mut s, &fixture("a1080.mp4")?);
