@@ -641,7 +641,7 @@ fn parse_args() -> Args {
             "--json" => a.json = it.next(),
             "--help" | "-h" => {
                 println!(
-                    "bench_playback [--scenario h264-1080,stack3,stack3-blend,stack3-fx,h264-2160,hevc-2160,vp9-2160,av1-2160,demo,after-preview,seek-storm] [--res full,half] [--cpu|--gpu] [--seconds 8] [--refresh 60] [--workers N] [--repeat N] [--json out.json]"
+                    "bench_playback [--scenario h264-1080,h264-1080-422-10b,stack3,stack3-blend,stack3-fx,h264-2160,h264-2160-422-10b,hevc-2160,vp9-2160,av1-2160,demo,after-preview,seek-storm] [--res full,half] [--cpu|--gpu] [--seconds 8] [--refresh 60] [--workers N] [--repeat N] [--json out.json]"
                 );
                 std::process::exit(0);
             }
@@ -649,10 +649,22 @@ fn parse_args() -> Args {
         }
     }
     if a.scenarios.is_empty() {
-        a.scenarios = ["h264-1080", "stack3", "stack3-blend", "stack3-fx", "h264-2160", "hevc-2160", "demo", "after-preview", "seek-storm"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        a.scenarios = [
+            "h264-1080",
+            "h264-1080-422-10b",
+            "stack3",
+            "stack3-blend",
+            "stack3-fx",
+            "h264-2160",
+            "h264-2160-422-10b",
+            "hevc-2160",
+            "demo",
+            "after-preview",
+            "seek-storm",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     }
     a
 }
@@ -721,6 +733,16 @@ pub fn scenario_session(name: &str) -> Option<(Session, ItemId)> {
         "h264-2160" | "seek-storm-2160" => {
             let a = import(&mut s, &fixture("a2160.mp4")?);
             build_sequence(&mut s, 3840, 2160, &[(a, 100.0, None, 0.0, 100.0)], &[], 10.0)
+        }
+        // High 4:2:2 10-bit, the camera format: no hardware decode on consumer GPUs, so this is the
+        // software path end to end.
+        "h264-2160-422-10b" => {
+            let a = import(&mut s, &fixture("a2160_422_10b.mp4")?);
+            build_sequence(&mut s, 3840, 2160, &[(a, 100.0, None, 0.0, 100.0)], &[], 10.0)
+        }
+        "h264-1080-422-10b" => {
+            let a = import(&mut s, &fixture("a1080_422_10b.mp4")?);
+            build_sequence(&mut s, 1920, 1080, &[(a, 100.0, None, 0.0, 100.0)], &[], 20.0)
         }
         "hevc-2160" | "seek-storm-hevc-2160" => {
             let a = import(&mut s, &fixture("hevc2160.mp4")?);
