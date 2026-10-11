@@ -20,6 +20,22 @@ fn put_plane(o: &mut std::io::BufWriter<std::fs::File>, pl: &Plane) {
     }
 }
 
+/// End offset of the next access-unit boundary in `data` that is at least `min_len` bytes in.
+///
+/// A chunked feed must not split a NAL unit: the decoder sees a truncated stream and errors. Start
+/// codes delimit NAL units in an Annex-B stream, so the boundary is the first start code at or past
+/// `min_len`. Falls back to the whole slice when none is found (the last unit).
+fn next_au_boundary(data: &[u8], min_len: usize) -> usize {
+    let mut i = min_len.min(data.len());
+    while i + 3 <= data.len() {
+        if data[i] == 0 && data[i + 1] == 0 && (data[i + 2] == 1 || (i + 4 <= data.len() && data[i + 2] == 0 && data[i + 3] == 1)) {
+            return i;
+        }
+        i += 1;
+    }
+    data.len()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -27,16 +43,53 @@ fn main() {
         std::process::exit(2);
     }
     let data = std::fs::read(&args[1]).expect("read input");
-    // H264_BENCH_ITERS=n: decode n times without output and report the best run
+    // H264_BENCH_ITERS=n: decode n times without output and report the best run.
+    //
+    // Pictures are dropped as they arrive instead of collected: a 4K 4:2:2 10-bit frame is 33 MB of
+    // `u16` planes, so retaining a 20 s clip would need ~16 GB and OOM the machine. Dropping each
+    // `Vec` lets the decoder's own bounded queue govern memory (~its DPB plus in-flight pictures),
+    // which makes the benchmark usable on the long 4K clips it exists to measure.
     if let Some(n) = std::env::var("H264_BENCH_ITERS").ok().and_then(|v| v.parse::<usize>().ok()) {
         let mut best = f64::MAX;
-        let mut frames = 0;
+        let mut frames = 0usize;
         let threads = std::env::var("H264_THREADS").ok().and_then(|v| v.parse::<usize>().ok());
+        // H264_INFLIGHT=n: bound the pictures in flight (see `Decoder::max_in_flight`), which is the
+        // other half of a bounded footprint when measuring long clips.
+        // Each in-flight picture is a full 4K 4:2:2 10-bit frame (33 MB of u16 planes) and the
+        // decoder's output queue holds up to `max_in_flight * 2` of them, so the default
+        // `threads + 2` costs ~1 GB at 4K before any output exists. Benchmarking clips of any length
+        // wants a bounded footprint more than it wants that extra read-ahead, so cap it here and let
+        // `H264_INFLIGHT` raise it for throughput measurements.
+        let inflight = std::env::var("H264_INFLIGHT").ok().and_then(|v| v.parse::<usize>().ok()).or(Some(2));
+        // H264_CHUNK=n: feed the stream in n-byte pieces across separate `decode()` calls, the way a
+        // demuxer does, instead of handing over the whole clip at once. Comparing the two shows
+        // whether retained memory comes from the size of one call or from decoding many pictures.
+        let chunk = std::env::var("H264_CHUNK").ok().and_then(|v| v.parse::<usize>().ok()).filter(|c| *c > 0);
         for _ in 0..n {
             let mut dec = threads.map(Decoder::with_threads).unwrap_or_default();
             dec.set_draft(std::env::var_os("H264_DRAFT").is_some());
+            if let Some(k) = inflight {
+                dec.set_max_in_flight(k);
+            }
             let t0 = std::time::Instant::now();
-            frames = dec.decode(&data, 0).expect("decode").len() + dec.flush().len();
+            frames = 0;
+            match chunk {
+                Some(c) => {
+                    // Split at access-unit boundaries, not at byte offsets: a chunk that cuts a NAL
+                    // unit in half makes the decoder see a truncated stream and error out.
+                    let mut off = 0usize;
+                    while off < data.len() {
+                        let rest = &data[off..];
+                        let end = next_au_boundary(rest, c);
+                        frames += dec.decode(&rest[..end], 0).expect("decode").len();
+                        off += end;
+                    }
+                    frames += dec.flush().len();
+                }
+                // `.len()` on the temporary frees that batch before the next call, so retained memory
+                // is the decoder's bounded queue rather than every picture the clip has produced.
+                None => frames = dec.decode(&data, 0).expect("decode").len() + dec.flush().len(),
+            }
             best = best.min(t0.elapsed().as_secs_f64());
         }
         eprintln!("best of {n}: {frames} frames in {best:.3}s ({:.1} fps)", frames as f64 / best);

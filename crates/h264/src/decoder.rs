@@ -165,6 +165,15 @@ impl Decoder {
         self.threads
     }
 
+    /// Bound how many pictures may be in flight at once (default: threads + 2).
+    ///
+    /// Decoding several pictures ahead is what makes the decoder fast on a multicore machine, but
+    /// each in-flight 4K 4:2:2 10-bit picture holds ~33 MB of samples, so a caller measuring a long
+    /// clip can trade some parallelism for a smaller footprint. Values below 1 are treated as 1.
+    pub fn set_max_in_flight(&mut self, max: usize) {
+        self.max_in_flight = max.max(1);
+    }
+
     /// Draft mode (off by default) for reduced-resolution playback: pictures submitted from now
     /// on that are non-reference pictures (`nal_ref_idc` 0) skip the deblocking filter (8.7).
     /// Nothing predicts from a non-reference picture (and deblocking never changes the motion
