@@ -17,7 +17,7 @@ set -u
 
 CLIP="${1:?usage: h264-ab.sh <clip> [--start S] [--dur S] [--iters N] [--threads \"1 4 12\"]}"
 shift
-START=0; DUR=20; ITERS=3; THREADS="1 4 12"; FPS=""
+START=0; DUR=20; ITERS=3; THREADS="1 4 12"; FPS=""; CHUNK=65536
 while [ $# -gt 0 ]; do
   case "$1" in
     --start)   START="$2"; shift 2 ;;   # accepted for compatibility; not used (see extraction note)
@@ -25,6 +25,7 @@ while [ $# -gt 0 ]; do
     --iters)   ITERS="$2"; shift 2 ;;
     --threads) THREADS="$2"; shift 2 ;;
     --fps)     FPS="$2"; shift 2 ;;
+    --chunk)   CHUNK="$2"; shift 2 ;;
     *) echo "unknown option: $1"; exit 2 ;;
   esac
 done
@@ -96,9 +97,9 @@ for T in $THREADS; do
   # `decode()` call retains ~1.5 frame-buffers per picture (2.4 GB for 300 frames of 720p); chunked
   # feeding is both far lighter (60 MB) and faster, so this is the honest measurement anyway.
   ERR=/tmp/h264ab-err.$$
-  OUR=$(env H264_BENCH_ITERS="$ITERS" H264_THREADS="$T" H264_CHUNK=262144 "$DEC" "$ES" 2>"$ERR" \
+  OUR=$(env H264_BENCH_ITERS="$ITERS" H264_THREADS="$T" H264_CHUNK="$CHUNK" "$DEC" "$ES" 2>"$ERR" \
         | true; grep -oE 'in [0-9.]+s' "$ERR" | grep -oE '[0-9.]+' | head -1)
-  OURR=$(env H264_BENCH_ITERS=1 H264_THREADS="$T" H264_CHUNK=262144 /usr/bin/time -f '%M' "$DEC" "$ES" 2>&1 >/dev/null \
+  OURR=$(env H264_BENCH_ITERS=1 H264_THREADS="$T" H264_CHUNK="$CHUNK" /usr/bin/time -f '%M' "$DEC" "$ES" 2>&1 >/dev/null \
         | tail -1)
   if [ -z "${OUR:-}" ]; then
     echo "  (threads=$T) our decoder produced no timing. Its output was:"
