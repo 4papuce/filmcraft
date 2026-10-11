@@ -42,7 +42,76 @@ fn main() {
         eprintln!("usage: h264dec in.h264 [out.yuv]");
         std::process::exit(2);
     }
+    // The streaming benchmark below opens the file itself, so nothing is read up front.
+    // H264_STREAM=1: benchmark by streaming the file in AU-aligned chunks, so peak memory does not
+    // depend on clip length. The whole-file path below needs the entire elementary stream resident
+    // (354 MB for 20 s of 4K), which is what exhausted memory on machines this was measuring.
+    if std::env::var_os("H264_STREAM").is_some() {
+        use std::io::Read;
+        let n = std::env::var("H264_BENCH_ITERS").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(1);
+        let threads = std::env::var("H264_THREADS").ok().and_then(|v| v.parse::<usize>().ok());
+        let chunk = std::env::var("H264_CHUNK").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(1 << 16).max(4096);
+        let inflight = std::env::var("H264_INFLIGHT").ok().and_then(|v| v.parse::<usize>().ok()).or(Some(2));
+        let mut best = f64::MAX;
+        let mut frames = 0usize;
+        for _ in 0..n {
+            let mut dec = threads.map(Decoder::with_threads).unwrap_or_default();
+            dec.set_draft(std::env::var_os("H264_DRAFT").is_some());
+            if let Some(k) = inflight {
+                dec.set_max_in_flight(k);
+            }
+            let mut f = match std::fs::File::open(&args[1]) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("{}: {e}", args[1]);
+                    return;
+                }
+            };
+            // Keep one read buffer plus an overlap tail, never the whole file.
+            let mut buf = vec![0u8; chunk * 2];
+            let mut fill = 0usize;
+            let t0 = std::time::Instant::now();
+            frames = 0;
+            loop {
+                let got = match f.read(&mut buf[fill..]) {
+                    Ok(0) => 0,
+                    Ok(g) => g,
+                    Err(e) => {
+                        eprintln!("read: {e}");
+                        break;
+                    }
+                };
+                fill += got;
+                let eof = got == 0;
+                // Feed every complete access unit in the buffer, keeping the incomplete tail.
+                loop {
+                    let end = next_au_boundary(&buf[..fill], 1);
+                    if end == fill && !eof {
+                        break;
+                    }
+                    if end == 0 || (end == fill && eof && fill == 0) {
+                        break;
+                    }
+                    frames += dec.decode(&buf[..end], 0).expect("decode").len();
+                    buf.copy_within(end..fill, 0);
+                    fill -= end;
+                    if eof {
+                        break;
+                    }
+                }
+                if eof {
+                    break;
+                }
+            }
+            frames += dec.flush().len();
+            best = best.min(t0.elapsed().as_secs_f64());
+        }
+        eprintln!("streamed best of {n}: {frames} frames in {best:.3}s ({:.1} fps)", frames as f64 / best);
+        return;
+    }
+
     let data = std::fs::read(&args[1]).expect("read input");
+
     // H264_BENCH_ITERS=n: decode n times without output and report the best run.
     //
     // Pictures are dropped as they arrive instead of collected: a 4K 4:2:2 10-bit frame is 33 MB of

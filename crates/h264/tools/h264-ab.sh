@@ -97,9 +97,9 @@ for T in $THREADS; do
   # `decode()` call retains ~1.5 frame-buffers per picture (2.4 GB for 300 frames of 720p); chunked
   # feeding is both far lighter (60 MB) and faster, so this is the honest measurement anyway.
   ERR=/tmp/h264ab-err.$$
-  OUR=$(env H264_BENCH_ITERS="$ITERS" H264_THREADS="$T" H264_CHUNK="$CHUNK" "$DEC" "$ES" 2>"$ERR" \
+  OUR=$(env H264_STREAM=1 H264_BENCH_ITERS="$ITERS" H264_THREADS="$T" H264_CHUNK="$CHUNK" "$DEC" "$ES" 2>"$ERR" \
         | true; grep -oE 'in [0-9.]+s' "$ERR" | grep -oE '[0-9.]+' | head -1)
-  OURR=$(env H264_BENCH_ITERS=1 H264_THREADS="$T" H264_CHUNK="$CHUNK" /usr/bin/time -f '%M' "$DEC" "$ES" 2>&1 >/dev/null \
+  OURR=$(env H264_STREAM=1 H264_BENCH_ITERS=1 H264_THREADS="$T" H264_CHUNK="$CHUNK" /usr/bin/time -f '%M' "$DEC" "$ES" 2>&1 >/dev/null \
         | tail -1)
   if [ -z "${OUR:-}" ]; then
     echo "  (threads=$T) our decoder produced no timing. Its output was:"
