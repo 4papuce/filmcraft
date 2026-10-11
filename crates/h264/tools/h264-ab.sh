@@ -47,7 +47,10 @@ ffprobe -v error -select_streams v -show_entries \
 # No `-ss`: with `-c copy` it emitted 12 frames for a 20 s request here, and a silently truncated
 # segment makes every number below meaningless. Take the segment from the start instead - decode cost
 # does not depend on where in the clip it sits - and verify the frame count below.
-ffmpeg -v error -y -t "$DUR" -i "$CLIP" -c copy -bsf:v h264_mp4toannexb -f h264 "$ES" \
+# `-map 0:v:0 -an` matters: without it `-c copy` muxes the audio track's NAL units into the
+# elementary stream, and the chunked feeder then cuts at an audio start code, slicing a video slice
+# in half (the decoder reports "CABAC read past end of slice data").
+ffmpeg -v error -y -t "$DUR" -i "$CLIP" -map 0:v:0 -an -c copy -bsf:v h264_mp4toannexb -f h264 "$ES" \
   || { echo "extraction failed"; exit 1; }
 [ -s "$ES" ] || { echo "empty elementary stream"; exit 1; }
 

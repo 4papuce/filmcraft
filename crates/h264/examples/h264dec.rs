@@ -82,22 +82,45 @@ fn main() {
                     }
                 };
                 fill += got;
-                let eof = got == 0;
-                // Feed every complete access unit in the buffer, keeping the incomplete tail.
+                let mut eof = got == 0;
+                // Feed every complete access unit, keeping the incomplete tail. If no boundary turns
+                // up before the buffer ends, the unit is larger than the buffer: grow it rather than
+                // truncating, which would hand the decoder half a slice.
                 loop {
-                    let end = next_au_boundary(&buf[..fill], 1);
-                    if end == fill && !eof {
+                    if fill == 0 {
                         break;
                     }
-                    if end == 0 || (end == fill && eof && fill == 0) {
-                        break;
+                    let end = next_au_boundary(&buf[..fill], 1);
+                    if end == fill {
+                        if eof {
+                            frames += dec.decode(&buf[..fill], 0).expect("decode").len();
+                            fill = 0;
+                        } else if buf.len() < fill * 2 {
+                            buf.resize(fill * 2, 0);
+                        }
+                        if eof || buf.len() < fill * 2 {
+                            continue;
+                        }
+                        // read more into the enlarged buffer before deciding anything
+                        match f.read(&mut buf[fill..]) {
+                            Ok(0) => eof = true,
+                            Ok(g) => fill += g,
+                            Err(e) => {
+                                eprintln!("read: {e}");
+                                eof = true;
+                            }
+                        }
+                        continue;
                     }
                     frames += dec.decode(&buf[..end], 0).expect("decode").len();
                     buf.copy_within(end..fill, 0);
                     fill -= end;
-                    if eof {
-                        break;
+                    if eof && buf.len() > chunk * 2 {
+                        buf.truncate(chunk * 2);
                     }
+                }
+                if eof {
+                    break;
                 }
                 if eof {
                     break;
